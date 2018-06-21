@@ -1,17 +1,34 @@
 [![Android Arsenal](https://img.shields.io/badge/Android%20Arsenal-ShimmerLayout-brightgreen.svg?style=flat)](https://android-arsenal.com/details/1/5767)
-[![Maven Central](https://maven-badges.herokuapp.com/maven-central/io.supercharge/shimmerlayout/badge.svg?style=plastic)](https://maven-badges.herokuapp.com/maven-central/io.supercharge/shimmerlayout)
+[![Maven Central](https://maven-badges.herokuapp.com/maven-central/io.supercharge/shimmerlayout/badge.svg?style=flat)](https://maven-badges.herokuapp.com/maven-central/io.supercharge/shimmerlayout)
+[![Android Weekly](http://img.shields.io/badge/Android%20Weekly-%23266-2CB3E5.svg?style=flat)](http://androidweekly.net/issues/issue-266)
+[![API](https://img.shields.io/badge/API-14%2B-brightgreen.svg?style=flat)](https://android-arsenal.com/api?level=14)
+[![Build Status](https://travis-ci.org/team-supercharge/ShimmerLayout.svg?branch=master)](https://travis-ci.org/team-supercharge/ShimmerLayout)
 
 # ShimmerLayout
 
-`ShimmerLayout` can be used to add shimmer effect (like the one used at Facebook or at LinkedIn) to your Android application. Beside memory efficiency even animating a big layout, you can modify the shimmer color and the speed of the animation as well.
+`ShimmerLayout` can be used to add shimmer effect (like the one used at Facebook or at LinkedIn) to your Android application. Beside memory efficiency even animating a big layout, you can customize the behaviour and look of the animation. Check out the [**wiki**](https://github.com/team-supercharge/ShimmerLayout/wiki/Home) for attributes!
 
-![ShimmerLayout](shimmerlayout.gif)
+<p align="center">
+<img src="/shimmerlayout.gif?raw=true" width="300" />
+</p>
+
+# Performance
+
+When it comes to performance, `ShimmerLayout` is the best option available. Not only can you achieve **high frame rate** even in RecyclerViews, but it also animates views with **insignificant memory footprint**.
+
+I conducted a benchmark to compare memory usages between different shimmer implementations. The test device I used is a HTC M8 phone. For the animations the sample application was used.
+
+| Library used | Android Profiler result |
+| --- | --- |
+| Facebook shimmer library 0.1.0        | ![ShimmerLayout](benchmark_images/facebook_0_1_0.PNG)             |
+| ShimmerLayout 1.2.0                   | ![ShimmerLayout](benchmark_images/shimmer_layout_1_2_0.PNG)       |
+| **ShimmerLayout 2.0.0**               | ![ShimmerLayout](benchmark_images/shimmer_layout_2_0_0.PNG)       |
 
 # Download and usage
 
 Get the latest artifact via gradle
 ```groovy
-compile 'io.supercharge:shimmerlayout:0.5.0'
+implementation 'io.supercharge:shimmerlayout:2.1.0'
 ```
 
 Create the layout on which you want to apply the effect and add as a child of a `ShimmerLayout`
@@ -42,6 +59,10 @@ Last, but not least you have to start it from your Java code
 ShimmerLayout shimmerText = (ShimmerLayout) findViewById(R.id.shimmer_text);
 shimmerText.startShimmerAnimation();
 ```
+# Further reading
+
+* [The development of ShimmerLayout](https://medium.com/supercharges-mobile-product-guide/shimmerlayout-26978ab53c28)  - In this article you can read why we created this library and the technologies we used.
+
 # License
 
 `ShimmerLayout` is opensource, contribution and feedback are welcome!

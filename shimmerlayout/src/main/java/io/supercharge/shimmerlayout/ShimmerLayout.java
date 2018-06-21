@@ -6,12 +6,14 @@ import android.animation.ValueAnimator;
 import android.content.Context;
 import android.content.res.TypedArray;
 import android.graphics.Bitmap;
+import android.graphics.BitmapShader;
 import android.graphics.Canvas;
 import android.graphics.Color;
+import android.graphics.ComposeShader;
 import android.graphics.LinearGradient;
 import android.graphics.Paint;
 import android.graphics.PorterDuff;
-import android.graphics.PorterDuffXfermode;
+import android.graphics.Rect;
 import android.graphics.Shader;
 import android.os.Build;
 import android.util.AttributeSet;
@@ -20,24 +22,37 @@ import android.widget.FrameLayout;
 
 public class ShimmerLayout extends FrameLayout {
 
-    private Paint maskPaint;
+    private static final int DEFAULT_ANIMATION_DURATION = 1500;
 
-    private ValueAnimator maskAnimator;
+    private static final byte DEFAULT_ANGLE = 20;
 
-    private Bitmap localAvailableBitmap;
-    private Bitmap localMaskBitmap;
+    private static final byte MIN_ANGLE_VALUE = -45;
+    private static final byte MAX_ANGLE_VALUE = 45;
+    private static final byte MIN_MASK_WIDTH_VALUE = 0;
+    private static final byte MAX_MASK_WIDTH_VALUE = 1;
 
-    private Bitmap destinationBitmap;
-    private Bitmap sourceMaskBitmap;
-    private Canvas canvasForRendering;
+    private static final byte MIN_GRADIENT_CENTER_COLOR_WIDTH_VALUE = 0;
+    private static final byte MAX_GRADIENT_CENTER_COLOR_WIDTH_VALUE = 1;
 
     private int maskOffsetX;
+    private Rect maskRect;
+    private Paint gradientTexturePaint;
+    private ValueAnimator maskAnimator;
 
+    private Bitmap localMaskBitmap;
+    private Bitmap maskBitmap;
+    private Canvas canvasForShimmerMask;
+
+    private boolean isAnimationReversed;
     private boolean isAnimationStarted;
-
+    private boolean autoStart;
     private int shimmerAnimationDuration;
-
     private int shimmerColor;
+    private int shimmerAngle;
+    private float maskWidth;
+    private float gradientCenterColorWidth;
+
+    private ViewTreeObserver.OnPreDrawListener startAnimationPreDrawListener;
 
     public ShimmerLayout(Context context) {
         this(context, null);
@@ -52,22 +67,28 @@ public class ShimmerLayout extends FrameLayout {
 
         setWillNotDraw(false);
 
-        maskPaint = new Paint();
-        maskPaint.setAntiAlias(true);
-        maskPaint.setDither(true);
-        maskPaint.setFilterBitmap(true);
-        maskPaint.setXfermode(new PorterDuffXfermode(PorterDuff.Mode.SRC_IN));
-
         TypedArray a = context.getTheme().obtainStyledAttributes(
                 attrs,
                 R.styleable.ShimmerLayout,
                 0, 0);
 
         try {
-            shimmerAnimationDuration = a.getInteger(R.styleable.ShimmerLayout_shimmer_animation_duration, 1500);
+            shimmerAngle = a.getInteger(R.styleable.ShimmerLayout_shimmer_angle, DEFAULT_ANGLE);
+            shimmerAnimationDuration = a.getInteger(R.styleable.ShimmerLayout_shimmer_animation_duration, DEFAULT_ANIMATION_DURATION);
             shimmerColor = a.getColor(R.styleable.ShimmerLayout_shimmer_color, getColor(R.color.shimmer_color));
+            autoStart = a.getBoolean(R.styleable.ShimmerLayout_shimmer_auto_start, false);
+            maskWidth = a.getFloat(R.styleable.ShimmerLayout_shimmer_mask_width, 0.5F);
+            gradientCenterColorWidth = a.getFloat(R.styleable.ShimmerLayout_shimmer_gradient_center_color_width, 0.1F);
+            isAnimationReversed = a.getBoolean(R.styleable.ShimmerLayout_shimmer_reverse_animation, false);
         } finally {
             a.recycle();
+        }
+
+        setMaskWidth(maskWidth);
+        setGradientCenterColorWidth(gradientCenterColorWidth);
+        setShimmerAngle(shimmerAngle);
+        if (autoStart && getVisibility() == VISIBLE) {
+            startShimmerAnimation();
         }
     }
 
@@ -82,7 +103,19 @@ public class ShimmerLayout extends FrameLayout {
         if (!isAnimationStarted || getWidth() <= 0 || getHeight() <= 0) {
             super.dispatchDraw(canvas);
         } else {
-            dispatchDrawUsingBitmap(canvas);
+            dispatchDrawShimmer(canvas);
+        }
+    }
+
+    @Override
+    public void setVisibility(int visibility) {
+        super.setVisibility(visibility);
+        if (visibility == VISIBLE) {
+            if (autoStart) {
+                startShimmerAnimation();
+            }
+        } else {
+            stopShimmerAnimation();
         }
     }
 
@@ -92,13 +125,17 @@ public class ShimmerLayout extends FrameLayout {
         }
 
         if (getWidth() == 0) {
-            getViewTreeObserver().addOnGlobalLayoutListener(new ViewTreeObserver.OnGlobalLayoutListener() {
+            startAnimationPreDrawListener = new ViewTreeObserver.OnPreDrawListener() {
                 @Override
-                public void onGlobalLayout() {
-                    ShimmerLayout.this.getViewTreeObserver().removeOnGlobalLayoutListener(this);
+                public boolean onPreDraw() {
+                    getViewTreeObserver().removeOnPreDrawListener(this);
                     startShimmerAnimation();
+
+                    return true;
                 }
-            });
+            };
+
+            getViewTreeObserver().addOnPreDrawListener(startAnimationPreDrawListener);
 
             return;
         }
@@ -109,6 +146,10 @@ public class ShimmerLayout extends FrameLayout {
     }
 
     public void stopShimmerAnimation() {
+        if (startAnimationPreDrawListener != null) {
+            getViewTreeObserver().removeOnPreDrawListener(startAnimationPreDrawListener);
+        }
+
         resetShimmering();
     }
 
@@ -122,6 +163,62 @@ public class ShimmerLayout extends FrameLayout {
         resetIfStarted();
     }
 
+    public void setAnimationReversed(boolean animationReversed) {
+        this.isAnimationReversed = animationReversed;
+        resetIfStarted();
+    }
+
+    /**
+     * Set the angle of the shimmer effect in clockwise direction in degrees.
+     * The angle must be between {@value #MIN_ANGLE_VALUE} and {@value #MAX_ANGLE_VALUE}.
+     *
+     * @param angle The angle to be set
+     */
+    public void setShimmerAngle(int angle) {
+        if (angle < MIN_ANGLE_VALUE || MAX_ANGLE_VALUE < angle) {
+            throw new IllegalArgumentException(String.format("shimmerAngle value must be between %d and %d",
+                    MIN_ANGLE_VALUE,
+                    MAX_ANGLE_VALUE));
+        }
+        this.shimmerAngle = angle;
+        resetIfStarted();
+    }
+
+    /**
+     * Sets the width of the shimmer line to a value higher than 0 to less or equal to 1.
+     * 1 means the width of the shimmer line is equal to half of the width of the ShimmerLayout.
+     * The default value is 0.5.
+     *
+     * @param maskWidth The width of the shimmer line.
+     */
+    public void setMaskWidth(float maskWidth) {
+        if (maskWidth <= MIN_MASK_WIDTH_VALUE || MAX_MASK_WIDTH_VALUE < maskWidth) {
+            throw new IllegalArgumentException(String.format("maskWidth value must be higher than %d and less or equal to %d",
+                    MIN_MASK_WIDTH_VALUE, MAX_MASK_WIDTH_VALUE));
+        }
+
+        this.maskWidth = maskWidth;
+        resetIfStarted();
+    }
+
+    /**
+     * Sets the width of the center gradient color to a value higher than 0 to less than 1.
+     * 0.99 means that the whole shimmer line will have this color with a little transparent edges.
+     * The default value is 0.1.
+     *
+     * @param gradientCenterColorWidth The width of the center gradient color.
+     */
+    public void setGradientCenterColorWidth(float gradientCenterColorWidth) {
+        if (gradientCenterColorWidth <= MIN_GRADIENT_CENTER_COLOR_WIDTH_VALUE
+                || MAX_GRADIENT_CENTER_COLOR_WIDTH_VALUE <= gradientCenterColorWidth) {
+            throw new IllegalArgumentException(String.format("gradientCenterColorWidth value must be higher than %d and less than %d",
+                    MIN_GRADIENT_CENTER_COLOR_WIDTH_VALUE, MAX_GRADIENT_CENTER_COLOR_WIDTH_VALUE));
+        }
+
+        this.gradientCenterColorWidth = gradientCenterColorWidth;
+        resetIfStarted();
+    }
+
     private void resetIfStarted() {
         if (isAnimationStarted) {
             resetShimmering();
@@ -129,44 +226,41 @@ public class ShimmerLayout extends FrameLayout {
         }
     }
 
-    private void dispatchDrawUsingBitmap(Canvas canvas) {
+    private void dispatchDrawShimmer(Canvas canvas) {
         super.dispatchDraw(canvas);
 
-        localAvailableBitmap = getDestinationBitmap();
-        if (localAvailableBitmap == null) {
-            return;
-        }
-
-        if (canvasForRendering == null) {
-            canvasForRendering = new Canvas(localAvailableBitmap);
-        }
-
-        drawMask(canvasForRendering);
-        canvas.save();
-        canvas.clipRect(maskOffsetX, 0, maskOffsetX + getWidth() / 2, getHeight());
-        canvas.drawBitmap(localAvailableBitmap, 0, 0, null);
-        canvas.restore();
-
-        localAvailableBitmap = null;
-    }
-
-    private void drawMask(Canvas renderCanvas) {
-        localMaskBitmap = getSourceMaskBitmap();
+        localMaskBitmap = getMaskBitmap();
         if (localMaskBitmap == null) {
             return;
         }
 
-        renderCanvas.save();
-        renderCanvas.clipRect(maskOffsetX, 0,
-                maskOffsetX + localMaskBitmap.getWidth(),
-                getHeight());
+        if (canvasForShimmerMask == null) {
+            canvasForShimmerMask = new Canvas(localMaskBitmap);
+        }
 
-        super.dispatchDraw(renderCanvas);
-        renderCanvas.drawBitmap(localMaskBitmap, maskOffsetX, 0, maskPaint);
+        canvasForShimmerMask.drawColor(Color.TRANSPARENT, PorterDuff.Mode.CLEAR);
 
-        renderCanvas.restore();
+        canvasForShimmerMask.save();
+        canvasForShimmerMask.translate(-maskOffsetX, 0);
+
+        super.dispatchDraw(canvasForShimmerMask);
+
+        canvasForShimmerMask.restore();
+
+        drawShimmer(canvas);
 
         localMaskBitmap = null;
+    }
+
+    private void drawShimmer(Canvas destinationCanvas) {
+        createShimmerPaint();
+
+        destinationCanvas.save();
+
+        destinationCanvas.translate(maskOffsetX, 0);
+        destinationCanvas.drawRect(maskRect.left, 0, maskRect.width(), maskRect.height(), gradientTexturePaint);
+
+        destinationCanvas.restore();
     }
 
     private void resetShimmering() {
@@ -176,59 +270,55 @@ public class ShimmerLayout extends FrameLayout {
         }
 
         maskAnimator = null;
+        gradientTexturePaint = null;
         isAnimationStarted = false;
 
         releaseBitMaps();
     }
 
     private void releaseBitMaps() {
-        if (sourceMaskBitmap != null) {
-            sourceMaskBitmap.recycle();
-            sourceMaskBitmap = null;
-        }
+        canvasForShimmerMask = null;
 
-        if (destinationBitmap != null) {
-            destinationBitmap.recycle();
-            destinationBitmap = null;
+        if (maskBitmap != null) {
+            maskBitmap.recycle();
+            maskBitmap = null;
         }
-
-        canvasForRendering = null;
     }
 
-    private Bitmap getDestinationBitmap() {
-        if (destinationBitmap == null) {
-            destinationBitmap = createBitmap(getWidth(), getHeight());
+    private Bitmap getMaskBitmap() {
+        if (maskBitmap == null) {
+            maskBitmap = createBitmap(maskRect.width(), getHeight());
         }
 
-        return destinationBitmap;
+        return maskBitmap;
     }
 
-    private Bitmap getSourceMaskBitmap() {
-        if (sourceMaskBitmap != null) {
-            return sourceMaskBitmap;
+    private void createShimmerPaint() {
+        if (gradientTexturePaint != null) {
+            return;
         }
 
-        int width = getWidth() / 2;
-        int height = getHeight();
-
-        sourceMaskBitmap = createBitmap(width, height);
-        Canvas canvas = new Canvas(sourceMaskBitmap);
+        final int edgeColor = reduceColorAlphaValueToZero(shimmerColor);
+        final float shimmerLineWidth = getWidth() / 2 * maskWidth;
+        final float yPosition = (0 <= shimmerAngle) ? getHeight() : 0;
 
         LinearGradient gradient = new LinearGradient(
-                0, 0,
-                width, 0,
-                new int[]{Color.TRANSPARENT, shimmerColor, shimmerColor, Color.TRANSPARENT},
-                new float[]{0.25F, 0.5F, 0.5F, 0.75F},
+                0, yPosition,
+                (float) Math.cos(Math.toRadians(shimmerAngle)) * shimmerLineWidth,
+                yPosition + (float) Math.sin(Math.toRadians(shimmerAngle)) * shimmerLineWidth,
+                new int[]{edgeColor, shimmerColor, shimmerColor, edgeColor},
+                getGradientColorDistribution(),
                 Shader.TileMode.CLAMP);
 
-        canvas.rotate(20, width / 2, height / 2);
+        BitmapShader maskBitmapShader = new BitmapShader(localMaskBitmap, Shader.TileMode.CLAMP, Shader.TileMode.CLAMP);
 
-        Paint paint = new Paint();
-        paint.setShader(gradient);
-        int padding = (int) (Math.sqrt(2) * Math.max(width, height)) / 2;
-        canvas.drawRect(0, -padding, width, height + padding, paint);
+        ComposeShader composeShader = new ComposeShader(gradient, maskBitmapShader, PorterDuff.Mode.DST_IN);
 
-        return sourceMaskBitmap;
+        gradientTexturePaint = new Paint();
+        gradientTexturePaint.setAntiAlias(true);
+        gradientTexturePaint.setDither(true);
+        gradientTexturePaint.setFilterBitmap(true);
+        gradientTexturePaint.setShader(composeShader);
     }
 
     private Animator getShimmerAnimation() {
@@ -236,21 +326,31 @@ public class ShimmerLayout extends FrameLayout {
             return maskAnimator;
         }
 
+        if (maskRect == null) {
+            maskRect = calculateBitmapMaskRect();
+        }
+
         final int animationToX = getWidth();
-        final int animationFromX = -animationToX;
-        final int shimmerBitmapWidth = getWidth() / 2;
+        final int animationFromX;
+
+        if (getWidth() > maskRect.width()) {
+            animationFromX = -animationToX;
+        } else {
+            animationFromX = -maskRect.width();
+        }
+
+        final int shimmerBitmapWidth = maskRect.width();
         final int shimmerAnimationFullLength = animationToX - animationFromX;
 
-        maskAnimator = ValueAnimator.ofFloat(0.0F, 1.0F);
+        maskAnimator = isAnimationReversed ? ValueAnimator.ofInt(shimmerAnimationFullLength, 0)
+                : ValueAnimator.ofInt(0, shimmerAnimationFullLength);
         maskAnimator.setDuration(shimmerAnimationDuration);
         maskAnimator.setRepeatCount(ObjectAnimator.INFINITE);
 
-        final float[] value = new float[1];
         maskAnimator.addUpdateListener(new ValueAnimator.AnimatorUpdateListener() {
             @Override
             public void onAnimationUpdate(ValueAnimator animation) {
-                value[0] = (Float) animation.getAnimatedValue();
-                maskOffsetX = ((int) (animationFromX + shimmerAnimationFullLength * value[0]));
+                maskOffsetX = animationFromX + (int) animation.getAnimatedValue();
 
                 if (maskOffsetX + shimmerBitmapWidth >= 0) {
                     invalidate();
@@ -263,10 +363,11 @@ public class ShimmerLayout extends FrameLayout {
 
     private Bitmap createBitmap(int width, int height) {
         try {
-            return Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888);
+            return Bitmap.createBitmap(width, height, Bitmap.Config.ALPHA_8);
         } catch (OutOfMemoryError e) {
             System.gc();
-            return Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888);
+
+            return null;
         }
     }
 
@@ -277,5 +378,32 @@ public class ShimmerLayout extends FrameLayout {
             //noinspection deprecation
             return getResources().getColor(id);
         }
+    }
+
+    private int reduceColorAlphaValueToZero(int actualColor) {
+        return Color.argb(0, Color.red(actualColor), Color.green(actualColor), Color.blue(actualColor));
+    }
+
+    private Rect calculateBitmapMaskRect() {
+        return new Rect(0, 0, calculateMaskWidth(), getHeight());
+    }
+
+    private int calculateMaskWidth() {
+        final double shimmerLineBottomWidth = (getWidth() / 2 * maskWidth) / Math.cos(Math.toRadians(Math.abs(shimmerAngle)));
+        final double shimmerLineRemainingTopWidth = getHeight() * Math.tan(Math.toRadians(Math.abs(shimmerAngle)));
+
+        return (int) (shimmerLineBottomWidth + shimmerLineRemainingTopWidth);
+    }
+
+    private float[] getGradientColorDistribution() {
+        final float[] colorDistribution = new float[4];
+
+        colorDistribution[0] = 0;
+        colorDistribution[3] = 1;
+
+        colorDistribution[1] = 0.5F - gradientCenterColorWidth / 2F;
+        colorDistribution[2] = 0.5F + gradientCenterColorWidth / 2F;
+
+        return colorDistribution;
     }
 }
